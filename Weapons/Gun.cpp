@@ -1131,6 +1131,7 @@ void AGun::ChainBounce(APawn* HitEnemy, FVector& LaunchDirection)
 
 void AGun::ChainBounceHelper(TSet<APawn*> CollidedTargets, APawn* HitEnemy, float RemainingBounces, FVector LaunchDirection)
 {
+	if (IsPendingKillPending() || !IsValid(this) || !IsValid(AbilitySystemComponent)) {return;}
 	const UAttributeSet_Gun* MyAttributes = AbilitySystemComponent->GetSet<UAttributeSet_Gun>();
 
 	//check hit an enemy and still have bounces left
