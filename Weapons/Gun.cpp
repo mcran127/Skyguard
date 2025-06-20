@@ -878,7 +878,12 @@ FVector AGun::GetSpreadPoint() const
 			HitResult.ImpactPoint - ViewInfo.Location,
 			CurrentSpreadAngle);
 
-		const float NewRange = FVector::Dist(HitResult.Location, ViewInfo.Location) + 5;
+		float NewRange = FVector::Dist(HitResult.Location, ViewInfo.Location) + 5;
+
+		if (GetAmmoType() == EAmmoType::Piercing)
+		{
+			NewRange = GetGunRange();
+		}
 
 		return ViewInfo.Location + SpreadDirection * NewRange;
 	}
