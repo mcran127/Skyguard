@@ -878,12 +878,7 @@ FVector AGun::GetSpreadPoint() const
 			HitResult.ImpactPoint - ViewInfo.Location,
 			CurrentSpreadAngle);
 
-		float NewRange = FVector::Dist(HitResult.Location, ViewInfo.Location) + 5;
-
-		if (GetAmmoType() == EAmmoType::Piercing)
-		{
-			NewRange = GetGunRange();
-		}
+		const float NewRange = FVector::Dist(HitResult.Location, ViewInfo.Location) + 5;
 
 		return ViewInfo.Location + SpreadDirection * NewRange;
 	}
@@ -914,10 +909,12 @@ void AGun::LineTrace(const FVector& TraceStart)
 		//Piercing ammo should overlap enemies so it can hit multiple
 		ResponseParams.CollisionResponse.SetResponse(Y25::Collision::Channels::Pawn, ECR_Overlap);
 
+		FVector NewEnd = TraceStart + LaunchDirection * GetGunRange();
+
 		GetWorld()->LineTraceMultiByChannel(
 			Hits,
 			TraceStart,
-			TraceEnd,
+			NewEnd,
 			Y25::Collision::Channels::Weapon,
 			QueryParams,
 			ResponseParams);
