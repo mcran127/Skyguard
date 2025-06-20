@@ -102,6 +102,7 @@ void AManCannon::OnOverlapBegin(
 			TimerHandle,
 			[this]
 			{
+				if (!IsValid(this)) {return;}
 				SetCanLaunch(true);
 				if (MeshComponent && DormantMontage)
 				{
