@@ -17,3 +17,7 @@ Within my primary role, I primarily worked on the modular weapon system includin
 Lastly, I helped on a number of features which may not be included here such as enemies, the main player, movement, game balancing
 
 While not all the code provided is specifically mine, I was the main, significant contributor to the provided files.
+
+## Videos
+
+https://youtube.com/playlist?list=PL9kCz4lZXPtBTs97_81TKSwSmB7mPPgxr&si=fKSxp0Ngq2uFiFSa
