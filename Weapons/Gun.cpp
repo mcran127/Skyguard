@@ -16,13 +16,13 @@
 #include "Engine/DamageEvents.h"
 #include "Utils/Gameplay/Cue.h"
 #include "Y25/Enemies/BaseEnemy.h"
+#include "Y25/Enemies/EnemySpawner/EnemySpawner.h"
 #include "Y25/Gameplay/Attributes/AttributeSet_Gun.h"
 #include "Y25/Gameplay/Cues.h"
 #include "Y25/Gameplay/Tags.h"
 #include "Y25/Player/MainCharacter.h"
 #include "Y25/Player/MainPlayerController.h"
 #include "AudioDevice.h"
-#include "Kismet/GameplayStatics.h"
 #include "Y25/Game/Control/ControlHUD.h"
 #include "Y25/Values/Collision.h"
 
@@ -233,7 +233,7 @@ int32& AGun::GetStat(const FName Name) const
 	return Default;
 }
 
-//Return a players stats based on name. These stats are whats displayed in game rather than for stat tracking purposes
+//Return a players stats based on name. These stats are what's displayed in game rather than for stat tracking purposes
 float& AGun::GetTrueStat(const FName Name) const
 {
 	if (const AController* Instigator = GetInstigatorController())
@@ -248,7 +248,7 @@ float& AGun::GetTrueStat(const FName Name) const
 }
 
 //Update a player's accuracy stat
-void AGun::UpdateAccuracy()
+void AGun::UpdateAccuracy() const
 {
 	if (const AController* Instigator = GetInstigatorController())
 	{
@@ -679,6 +679,11 @@ void AGun::UpdateMagazineSize()
 	SetReloadTime(MyAttributes->GetReloadSpeed());
 	SetCurrentNumBullets(GetCurrentClipSize());
 
+	if (AMainCharacter* MainCharacter = Cast<AMainCharacter>(GetOwner()))
+	{
+		MainCharacter->ActivateAmmoOutline(false);
+	}
+
 	//Update HUD bullet amount
 	OnReserveChange.Broadcast(GetCurrentNumBullets(), GetCurrentReserves());
 	OnGunChange.Broadcast(GetCurrentNumBullets(), GetCurrentReserves());
@@ -734,6 +739,11 @@ void AGun::ShootGun()
 			GetPlayerHUD()->AddPlayerNotification(INVTEXT("Out of ammo find a station"));
 			MainCharacter->PlayVO(Y25::Cues::Player_Ammo_Depleted);
 		}
+
+		if (MainCharacter->GetCurrentMontage() == MainCharacter->GetEmoteMontage())
+		{
+			MainCharacter->StopAnimMontage(MainCharacter->GetCurrentMontage());
+		}
 	}
 	
 	else if (bPromptReload)
@@ -787,16 +797,24 @@ void AGun::ShootGun()
 
 	//Fire Delay
 	FTimerHandle FireDelayTimerHandle;
+	TWeakObjectPtr WeakThis(this);
+	
 	GetWorldTimerManager().SetTimer(
 		FireDelayTimerHandle,
-		[this]
+		[WeakThis]
 		{
-			if (const AMainCharacter* MainCharacter = Cast<AMainCharacter>(GetOwner());
-				MainCharacter && !MainCharacter->IsGliding() && !MainCharacter->GetHasLaunched())
+			if (!WeakThis.IsValid())
 			{
-				SetCanFire(true);
+				return;
 			}
-			SetReloading(false);
+			
+			if (const AMainCharacter* MainCharacter = Cast<AMainCharacter>(WeakThis->GetOwner());
+				MainCharacter && !MainCharacter->IsGliding() && !MainCharacter->GetHasLaunched() &&
+				!MainCharacter->GetIsDead())
+			{
+				WeakThis->SetCanFire(true);
+			}
+			WeakThis->SetReloading(false);
 		},
 		MyAttributes->GetFireDelay(),
 		false);
@@ -865,7 +883,7 @@ FVector AGun::GetSpreadPoint() const
 	FHitResult HitResult;
 	GetWorld()->LineTraceSingleByChannel(
 		HitResult,
-		ViewInfo.Location,
+		ViewInfo.Location + ViewInfo.Rotation.Vector() * 25,
 		ViewInfo.Location + ViewInfo.Rotation.Vector() * CurrentRange,
 		Y25::Collision::Channels::Weapon,
 		QueryParams);
@@ -982,7 +1000,7 @@ void AGun::BulletChainLineTraceEffect(FVector& LaunchDirection, const FHitResult
 	FGameplayCueParameters CueParam;
 	CueParam.Instigator = GetOwner();
 
-	//Play a on hit cue
+	//Play an on hit cue
 	if (!HitEnemy && !HitAlly && !HitSpawner)
 	{
 		CueParam.Location = Hit.ImpactPoint;
@@ -1091,7 +1109,7 @@ void AGun::BulletChainLineTraceEffect(FVector& LaunchDirection, const FHitResult
 		GetStat(FriendHitsStat)++;
 		GetTrueStat(TEXT("Friend Hits"))++;
 	}
-	//If they shot the enemy dropship
+	//If they shot the enemy drop-ship
 	else
 	{
 		CueParam.SourceObject = HitSpawner;
@@ -1113,14 +1131,16 @@ void AGun::ChainBounce(APawn* HitEnemy, FVector& LaunchDirection)
 	CollidedTargets.Add(HitEnemy);
 
 	FTimerHandle ChainDelayTimer;
+	TWeakObjectPtr WeakThis = this;
 
 	//Small timer for non-near instant bounce
 	GetWorldTimerManager().SetTimer(
 		ChainDelayTimer,
-		[this, CollidedTargets, HitEnemy, RemainingBounces, LaunchDirection, &ChainDelayTimer]()
+		[WeakThis, CollidedTargets, HitEnemy, RemainingBounces, LaunchDirection]()
 		{
-			ChainBounceHelper(CollidedTargets, HitEnemy, RemainingBounces, LaunchDirection);
-			GetWorldTimerManager().ClearTimer(ChainDelayTimer);
+			if (!WeakThis.IsValid()) {return;}
+			
+			WeakThis->ChainBounceHelper(CollidedTargets, HitEnemy, RemainingBounces, LaunchDirection);
 		},
 		0.2f,
 		false);
@@ -1186,13 +1206,15 @@ void AGun::ChainBounceHelper(TSet<APawn*> CollidedTargets, APawn* HitEnemy, floa
 
 	//Repeat if targets available and bounces left
 	FTimerHandle ChainDelayHelperTimer;
+	TWeakObjectPtr WeakThis = this;
 
 	GetWorldTimerManager().SetTimer(
 		ChainDelayHelperTimer,
-		[this, CollidedTargets, BounceTarget, RemainingBounces, LaunchDirection, &ChainDelayHelperTimer]
+		[WeakThis, CollidedTargets, BounceTarget, RemainingBounces, LaunchDirection]
 		{
-			ChainBounceHelper(CollidedTargets, BounceTarget, RemainingBounces, LaunchDirection);
-			GetWorldTimerManager().ClearTimer(ChainDelayHelperTimer);
+			if (!WeakThis.IsValid()) {return;}
+			
+			WeakThis->ChainBounceHelper(CollidedTargets, BounceTarget, RemainingBounces, LaunchDirection);
 		},
 		.2f,
 		false);
