@@ -51,7 +51,7 @@ void AManCannon::SetCanLaunch(const bool bEnabled)
 		{
 			for (AActor* OverlappingActor : OverlappingActors)
 			{
-				if (OverlappingActor->IsA<AMainCharacter>())
+				if (OverlappingActor->IsA(AMainCharacter::StaticClass()))
 				{
 					OnOverlapBegin(
 						CollisionComponent,
@@ -80,37 +80,47 @@ void AManCannon::OnOverlapBegin(
 	bool bFromSweep,
 	const FHitResult& Hit)
 {
-
-	if (OtherActor->IsA(AMainCharacter::StaticClass()))
+	if (CanLaunch())
 	{
-		SetCanLaunch(false);
+		if (OtherActor->IsA(AMainCharacter::StaticClass()))
+		{
+			SetCanLaunch(false);
 
-		//Set the person who originally overlapped
-		FirstToLaunch = Cast<AMainCharacter>(OtherActor);
+			//Set the person who originally overlapped
+			FirstToLaunch = Cast<AMainCharacter>(OtherActor);
 
-		MeshComponent->PlayAnimation(LaunchMontage, false);
+			MeshComponent->PlayAnimation(LaunchMontage, false);
 
-		//Edit player movement/montages
-		const AMainCharacter* Character = Cast<AMainCharacter>(OtherActor);
-		Character->GetMovementComponent()->ClearAccumulatedForces();
-		Character->GetMovementComponent()->SquatStop();
-		Character->GetMesh()->GetAnimInstance()->StopAllMontages(0);
-
-		//Reset man cannon after launch
-		FTimerHandle TimerHandle;
-		GetWorldTimerManager().SetTimer(
-			TimerHandle,
-			[this]
+			//Edit player movement/montages
+			const AMainCharacter* Character = Cast<AMainCharacter>(OtherActor);
+			Character->GetMovementComponent()->ClearAccumulatedForces();
+			if (Character->bIsCrouched)
 			{
-				if (!IsValid(this)) {return;}
-				SetCanLaunch(true);
-				if (MeshComponent && DormantMontage)
+				Character->GetMovementComponent()->SquatStop();
+			}
+			Character->GetMesh()->GetAnimInstance()->StopAllMontages(0);
+
+			//Reset man cannon after launch
+			FTimerHandle TimerHandle;
+
+			TWeakObjectPtr WeakThis(this);
+			GetWorldTimerManager().SetTimer(
+				TimerHandle,
+				[WeakThis]
 				{
-					MeshComponent->PlayAnimation(DormantMontage, true);
-				}
-			},
-			LaunchMontage->GetPlayLength(),
-			false);
+					if (!WeakThis.IsValid()) {return;}
+
+					AManCannon* ManCannon = Cast<AManCannon>(WeakThis.Get());
+					
+					if (ManCannon->MeshComponent && ManCannon->DormantMontage)
+					{
+						ManCannon->MeshComponent->PlayAnimation(ManCannon->DormantMontage, true);
+					}
+					ManCannon->SetCanLaunch(true);
+				},
+				LaunchMontage->GetPlayLength(),
+				false);
+		}
 	}
 }
 
@@ -164,8 +174,8 @@ void AManCannon::LaunchActor(AMainCharacter* MainCharacter)
 	FVector LaunchDirection = LaunchDirectionArrow->GetForwardVector();
 	LaunchDirection.Normalize();
 
-	MainCharacter->GetMovementComponent()->Velocity = LaunchDirection * Force;
-
+	//MainCharacter->GetMovementComponent()->Velocity = LaunchDirection * Force;
+	MainCharacter->LaunchCharacter(LaunchDirection * Force, true, true);
 
 	TWeakObjectPtr<ACharacter> WeakCharacter = MainCharacter;
 	FTimerHandle* LaunchTimer = new FTimerHandle();
