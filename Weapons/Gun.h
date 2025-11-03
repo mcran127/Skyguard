@@ -6,8 +6,8 @@
 #include "Delegates/DelegateCombinations.h"
 #include "GameFramework/Actor.h"
 #include "GameplayEffect.h"
+#include "Utils/Gameplay/Cue.h"
 #include "Y25/Enemies/BaseEnemy.h"
-#include "Y25/Enemies/EnemySpawner/EnemySpawner.h"
 #include "Y25/Weapons/GrenadeProjectile.h"
 #include "Y25/Game/Control/ControlHUD.h"
 
@@ -124,6 +124,12 @@ public:
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UShopData_Item>> CurrentMods;
 
+	UFUNCTION(BlueprintCallable)
+	void SetCurrentGunStats(UShopData_Item* NewGunStats);
+
+	UFUNCTION(BlueprintCallable)
+	UShopData_Item* GetCurrentGunStats();
+
 	//rumble
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Haptics")
 	TObjectPtr<UForceFeedbackEffect> WeaponFireRumbleEffect;
@@ -155,6 +161,9 @@ private:
 
 	//keeps track of the current gun mod effects on the player
 	FActiveGameplayEffectHandle GunModGameplayEffect;
+
+	UPROPERTY()
+	TObjectPtr<UShopData_Item> CurrentGunStats;
 
 	//GUN TYPE INFO
 
@@ -193,7 +202,6 @@ private:
 	int32 CurrentMagazineMaxReserves = 100;
 
 	// Capsule Trace/Aim Assist
-
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Gun", meta = (AllowPrivateAccess = true))
 	int32 CapRadius = 25;
 
@@ -232,7 +240,7 @@ private:
 #pragma endregion
 
 public:
-	//Bools
+	//Bool
 	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category="STUPIDBOOLS")
 	bool bCanFire = true;
 
@@ -246,8 +254,6 @@ public:
 	bool bRecoiling = false;
 
 	bool bPromptReload = false;
-
-	bool bShouldPlayReloadVoice = true;
 
 	//HUD Functions
 	AControlHUD* GetPlayerHUD() const;
@@ -299,7 +305,7 @@ public:
 	void BulletChainLineTraceEffect(FVector& LaunchDirection, const FHitResult& Hit);
 
 	UFUNCTION(BlueprintCallable, Category = "Y25|Gun")
-	void DealDamage(float DamageToDeal, FVector& LaunchDirection, ABaseEnemy* Target);
+	void DealDamage(float DamageToDeal, ABaseEnemy* Target);
 
 	UFUNCTION(BlueprintCallable, Category = "Y25|Gun")
 	void DealAllyDamage(float DamageToDeal, FVector& LaunchDirection, AMainCharacter* Target);
@@ -346,9 +352,6 @@ public:
 	void SetReloadTime(float NewTime);
 
 	UFUNCTION(Category="GetSet")
-	float GetReloadTime() const;
-
-	UFUNCTION(Category="GetSet")
 	void SetCurrentClipSize(int32 NewCurrSize);
 
 	UFUNCTION(Category="GetSet")
@@ -364,25 +367,7 @@ public:
 	int32 GetCurrentMagazineClipSize() const;
 
 	UFUNCTION(Category="GetSet")
-	void SetCurrentMagazineClipSize(int32 NewCurrentMagazineClipSize);
-
-	UFUNCTION(Category="GetSet")
-	int32 GetCurrentMagazineNumBullets() const;
-
-	UFUNCTION(Category="GetSet")
-	void SetCurrentMagazineNumBullets(int32 NewCurrentMagazineNumBullets);
-
-	UFUNCTION(Category="GetSet")
-	int32 GetCurrentMagazineCurrentReserves() const;
-
-	UFUNCTION(Category="GetSet")
-	void SetCurrentMagazineCurrentReserves(int32 NewCurrentMagazineCurrentReserves);
-
-	UFUNCTION(Category="GetSet")
 	int32 GetCurrentMagazineMaxReserves() const;
-
-	UFUNCTION(Category="GetSet")
-	void SetCurrentMagazineMaxReserves(int32 NewCurrentMagazineMaxReserves);
 
 	UFUNCTION(Category="GetSet")
 	bool CanFire() const;
@@ -395,9 +380,6 @@ public:
 
 	UFUNCTION(Category="GetSet")
 	void SetReloading(bool Reloading);
-
-	UFUNCTION(Category="GetSet")
-	bool GetAiming() const;
 
 	UFUNCTION(Category="GetSet")
 	void SetAiming(bool Aiming);
@@ -421,19 +403,10 @@ public:
 	float GetGunRange() const;
 
 	UFUNCTION(Category="GetSet")
-	void SetChainBounceRange(float NewChainBounceRange);
-
-	UFUNCTION(Category="GetSet")
 	float GetChainBounceRange() const;
 
 	UFUNCTION(Category="GetSet")
-	void SetCritDamageMultiplier(float NewCritDamageMultiplier);
-
-	UFUNCTION(Category="GetSet")
 	float GetCritDamageMultiplier() const;
-
-	UFUNCTION(Category="GetSet")
-	void SetCriticalDistance(float NewCriticalDistance);
 
 	UFUNCTION(Category="GetSet")
 	float GetCriticalDistance() const;
@@ -447,7 +420,7 @@ protected:
 	bool IsPowerStationShipAlive = false;
 
 	bool IsCommandArmoryShipAlive = false;
-
+	
 	virtual void BeginPlay() override;
 
 	virtual void PostInitializeComponents() override;
@@ -456,7 +429,11 @@ protected:
 
 	float& GetTrueStat(FName Name) const;
 
-	void UpdateAccuracy();
+	void UpdateAccuracy() const;
+
+	float CheckCriticalHit(ABaseEnemy* HitEnemy, const FHitResult& Hit, const FGameplayCueParameters& CueParam) const;
+
+	void CheckBotKill(const ABaseEnemy* BaseEnemy) const;
 
 	//AttributeSet
 	UPROPERTY()

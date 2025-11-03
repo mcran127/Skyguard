@@ -14,8 +14,6 @@
 #include "GunTracerData.h"
 #include "TimerManager.h"
 #include "Engine/DamageEvents.h"
-#include "Utils/Gameplay/Cue.h"
-#include "Y25/Enemies/BaseEnemy.h"
 #include "Y25/Enemies/EnemySpawner/EnemySpawner.h"
 #include "Y25/Gameplay/Attributes/AttributeSet_Gun.h"
 #include "Y25/Gameplay/Cues.h"
@@ -226,16 +224,14 @@ int32& AGun::GetStat(const FName Name) const
 			return PlayerState->PlayerEndStats.FindOrAdd(Name);
 		}
 	}
-
-	// It might be better to return a pointer and let the callee handle the nullptr case
-	// but this keeps it simple.
-	Default = 0;
 	return Default;
 }
 
 //Return a players stats based on name. These stats are what's displayed in game rather than for stat tracking purposes
 float& AGun::GetTrueStat(const FName Name) const
 {
+	static float Default = 0;
+	
 	if (const AController* Instigator = GetInstigatorController())
 	{
 		if (AControlPlayerState* PlayerState = Instigator->GetPlayerState<AControlPlayerState>())
@@ -243,7 +239,6 @@ float& AGun::GetTrueStat(const FName Name) const
 			return PlayerState->PlayerTrueStats.FindOrAdd(Name);
 		}
 	}
-	static float Default = 0;
 	return Default;
 }
 
@@ -260,6 +255,61 @@ void AGun::UpdateAccuracy() const
 			PlayerState->PlayerTrueStats.FindOrAdd("Accuracy") = BotHits / ShotsFired;
 			//MVP calculation
 			PlayerState->UpdateScore();
+		}
+	}
+}
+
+float AGun::CheckCriticalHit(
+	ABaseEnemy* HitEnemy,
+	const FHitResult& Hit,
+	const FGameplayCueParameters& CueParam) const
+{
+	const UAttributeSet_Gun* MyAttributes = AbilitySystemComponent->GetSet<UAttributeSet_Gun>();
+	float Damage = MyAttributes->GetBulletDamage();
+	
+	if (const USkeletalMeshComponent* EnemyMesh = HitEnemy->GetMesh())
+	{
+		//Check for hit close enough to the crit point on an enemy
+		if (const float CritDistance = FVector::Dist(Hit.ImpactPoint, EnemyMesh->GetSocketLocation("Critical"));
+			CritDistance <= GetCriticalDistance())
+		{
+			//Deal crit damage + activate crit effects
+			UAbilitySystemGlobals::Get().GetGameplayCueManager()->ExecuteGameplayCue_NonReplicated(
+				HitEnemy,
+				Y25::Cues::Gun_AmmoHit_Crit,
+				CueParam);
+
+			Damage *= GetCritDamageMultiplier();
+			GetStat(CriticalHitsStat)++;
+			GetTrueStat(TEXT("Critical Hits"))++;
+
+			if (const AMainCharacter* MainCharacter = Cast<AMainCharacter>(GetOwner()))
+			{
+				if (AControlPlayerState* ControlPlayerState =
+					Cast<AControlPlayerState>(MainCharacter->GetPlayerState()))
+				{
+					ControlPlayerState->UpdateScore();
+				}
+			}
+		}
+	}
+	return Damage;
+}
+
+void AGun::CheckBotKill(const ABaseEnemy* BaseEnemy) const
+{
+	if (BaseEnemy->Health->GetHealth() <= 0)
+	{
+		GetStat(BotKillsStat)++;
+		GetTrueStat(TEXT("Bot Kills"))++;
+
+		if (const AMainCharacter* MainCharacter = Cast<AMainCharacter>(GetOwner()))
+		{
+			if (AControlPlayerState* ControlPlayerState =
+				Cast<AControlPlayerState>(MainCharacter->GetPlayerState()))
+			{
+				ControlPlayerState->UpdateScore();
+			}
 		}
 	}
 }
@@ -305,7 +355,7 @@ void AGun::SetGunType(const EGunType NewType)
 				const auto& KeyTag : SwapGunStats)
 			{
 				SwapGunSpecHandle.Data->SetSetByCallerMagnitude(KeyTag.Key, KeyTag.Value);
-				UE_LOG(LogGun, Warning, TEXT("Itterating over my  set %f"), KeyTag.Value);
+				UE_LOG(LogGun, Warning, TEXT("Iterating over my  set %f"), KeyTag.Value);
 			}
 
 			GunModGameplayEffect = AbilitySystemComponent->ApplyGameplayEffectSpecToSelf(*SwapGunSpecHandle.Data.Get());
@@ -376,7 +426,7 @@ void AGun::SetMod(UShopData_Item* Mod)
 				const auto& KeyTag : SwapGunStats)
 			{
 				AddModSpecHandle.Data->SetSetByCallerMagnitude(KeyTag.Key, KeyTag.Value);
-				UE_LOG(LogGun, Warning, TEXT("Itterating over my  set %f"), KeyTag.Value);
+				UE_LOG(LogGun, Warning, TEXT("Iterating over my  set %f"), KeyTag.Value);
 			}
 
 			PureModPlayEffect = AbilitySystemComponent->ApplyGameplayEffectSpecToSelf(*AddModSpecHandle.Data.Get());
@@ -388,6 +438,16 @@ void AGun::SetMod(UShopData_Item* Mod)
 TArray<UShopData_Item*> AGun::GetMods()
 {
 	return CurrentMods;
+}
+
+void AGun::SetCurrentGunStats(UShopData_Item* NewGunStats)
+{
+	CurrentGunStats = NewGunStats;
+}
+
+UShopData_Item* AGun::GetCurrentGunStats()
+{
+	return CurrentGunStats;
 }
 
 EGunType AGun::GetGunType() const
@@ -450,11 +510,6 @@ void AGun::SetReloadTime(const float NewTime)
 	ReloadTime = NewTime;
 }
 
-float AGun::GetReloadTime() const
-{
-	return ReloadTime;
-}
-
 void AGun::SetCurrentClipSize(const int32 NewCurrSize)
 {
 	CurrentMagazineClipSize = NewCurrSize;
@@ -507,29 +562,14 @@ float AGun::GetGunRange() const
 	return GunRange;
 }
 
-void AGun::SetChainBounceRange(const float NewChainBounceRange)
-{
-	ChainBounceRange = NewChainBounceRange;
-}
-
 float AGun::GetChainBounceRange() const
 {
 	return ChainBounceRange;
 }
 
-void AGun::SetCritDamageMultiplier(const float NewCritDamageMultiplier)
-{
-	CritDamageMultiplier = NewCritDamageMultiplier;
-}
-
 float AGun::GetCritDamageMultiplier() const
 {
 	return CritDamageMultiplier;
-}
-
-void AGun::SetCriticalDistance(const float NewCriticalDistance)
-{
-	CriticalDistance = NewCriticalDistance;
 }
 
 float AGun::GetCriticalDistance() const
@@ -556,39 +596,9 @@ int32 AGun::GetCurrentMagazineClipSize() const
 	return CurrentMagazineClipSize;
 }
 
-void AGun::SetCurrentMagazineClipSize(const int32 NewCurrentMagazineClipSize)
-{
-	CurrentMagazineClipSize = NewCurrentMagazineClipSize;
-}
-
-int32 AGun::GetCurrentMagazineNumBullets() const
-{
-	return CurrentMagazineNumBullets;
-}
-
-void AGun::SetCurrentMagazineNumBullets(const int32 NewCurrentMagazineNumBullets)
-{
-	CurrentMagazineNumBullets = NewCurrentMagazineNumBullets;
-}
-
-int32 AGun::GetCurrentMagazineCurrentReserves() const
-{
-	return CurrentMagazineCurrentReserves;
-}
-
-void AGun::SetCurrentMagazineCurrentReserves(const int32 NewCurrentMagazineCurrentReserves)
-{
-	CurrentMagazineCurrentReserves = NewCurrentMagazineCurrentReserves;
-}
-
 int32 AGun::GetCurrentMagazineMaxReserves() const
 {
 	return CurrentMagazineMaxReserves;
-}
-
-void AGun::SetCurrentMagazineMaxReserves(const int32 NewCurrentMagazineMaxReserves)
-{
-	CurrentMagazineMaxReserves = NewCurrentMagazineMaxReserves;
 }
 
 bool AGun::CanFire() const
@@ -609,11 +619,6 @@ bool AGun::GetReloading() const
 void AGun::SetReloading(const bool Reloading)
 {
 	bReloading = Reloading;
-}
-
-bool AGun::GetAiming() const
-{
-	return bAiming;
 }
 
 void AGun::SetAiming(const bool Aiming)
@@ -648,9 +653,7 @@ FVector AGun::GetMuzzleTransform() const
 
 	switch (GetGunType())
 	{
-	case EGunType::Pistol:
-		SocketName = "barrelEndPistol";
-		break;
+	
 	case EGunType::Shotgun:
 		SocketName = "barrelEndShotgun";
 		break;
@@ -660,9 +663,9 @@ FVector AGun::GetMuzzleTransform() const
 	case EGunType::SniperRifle:
 		SocketName = "barrelEndSniper";
 		break;
+	case EGunType::Pistol:
 	default:
 		SocketName = "barrelEndPistol";
-		break;
 	}
 
 	return GunMesh->GetSocketLocation(SocketName);
@@ -710,13 +713,12 @@ void AGun::ReloadGun()
 			MainCharacter->PlayVO(Y25::Cues::Player_Ammo_LastReload);
 		}
 	}
-	else if (bPromptReload)
+	if (bPromptReload)
 	{
 		bPromptReload = false;
 		GetPlayerHUD()->RemovePlayerNotification();
 	}
 
-	bShouldPlayReloadVoice = true;
 	SetCurrentNumBullets(GetCurrentNumBullets() + BulletsGrabbed);
 
 	//Update HUD bullets
@@ -819,10 +821,6 @@ void AGun::ShootGun()
 		MyAttributes->GetFireDelay(),
 		false);
 
-	// count shots fired
-	GetStat(ShotsFiredStat)++;
-	UpdateAccuracy();
-
 	// set need to reload for prompt
 	if (GetCurrentNumBullets() <= GetCurrentMagazineClipSize() * .3)
 	{
@@ -838,6 +836,9 @@ void AGun::ShootGun()
 
 	for (int i = 0; i < NumFired; i++)
 	{
+		GetStat(ShotsFiredStat)++;
+		UpdateAccuracy();
+		
 		//Line Trace or Grenade
 		switch (GetAmmoType())
 		{
@@ -928,7 +929,7 @@ void AGun::LineTrace(const FVector& TraceStart)
 		ResponseParams.CollisionResponse.SetResponse(Y25::Collision::Channels::Pawn, ECR_Overlap);
 
 		FVector NewEnd = TraceStart + LaunchDirection * GetGunRange();
-
+		
 		GetWorld()->LineTraceMultiByChannel(
 			Hits,
 			TraceStart,
@@ -1039,51 +1040,12 @@ void AGun::BulletChainLineTraceEffect(FVector& LaunchDirection, const FHitResult
 			ChainBounce(HitEnemy, LaunchDirection);
 		}
 
-		float Damage = MyAttributes->GetBulletDamage();
-		if (const USkeletalMeshComponent* EnemyMesh = HitEnemy->GetMesh())
-		{
-			//Check for hit close enough to the crit point on an enemy
-			if (const float CritDistance = FVector::Dist(Hit.ImpactPoint, EnemyMesh->GetSocketLocation("Critical"));
-				CritDistance <= GetCriticalDistance())
-			{
-				//Deal crit damage + activate crit effects
-				UAbilitySystemGlobals::Get().GetGameplayCueManager()->ExecuteGameplayCue_NonReplicated(
-					HitEnemy,
-					Y25::Cues::Gun_AmmoHit_Crit,
-					CueParam);
+		const float Damage = CheckCriticalHit(HitEnemy, Hit, CueParam);
 
-				Damage *= GetCritDamageMultiplier();
-				GetStat(CriticalHitsStat)++;
-				GetTrueStat(TEXT("Critical Hits"))++;
-
-				if (const AMainCharacter* MainCharacter = Cast<AMainCharacter>(GetOwner()))
-				{
-					if (AControlPlayerState* ControlPlayerState =
-						Cast<AControlPlayerState>(MainCharacter->GetPlayerState()))
-					{
-						ControlPlayerState->UpdateScore();
-					}
-				}
-			}
-		}
-
-		DealDamage(Damage, LaunchDirection, HitEnemy);
+		DealDamage(Damage, HitEnemy);
 
 		// add to bots killed
-		if (HitEnemy->Health->GetHealth() <= 0)
-		{
-			GetStat(BotKillsStat)++;
-			GetTrueStat(TEXT("Bot Kills"))++;
-
-			if (const AMainCharacter* MainCharacter = Cast<AMainCharacter>(GetOwner()))
-			{
-				if (AControlPlayerState* ControlPlayerState =
-					Cast<AControlPlayerState>(MainCharacter->GetPlayerState()))
-				{
-					ControlPlayerState->UpdateScore();
-				}
-			}
-		}
+		CheckBotKill(HitEnemy);
 
 		GetStat(EnemyHitsStat)++;
 		UpdateAccuracy();
@@ -1194,9 +1156,7 @@ void AGun::ChainBounceHelper(TSet<APawn*> CollidedTargets, APawn* HitEnemy, floa
 
 		//Less Damage based on number of bounces
 		DealDamage(
-			MyAttributes->GetBulletDamage() / pow(2, 5 - RemainingBounces),
-			LaunchDirection,
-			BounceTarget);
+			MyAttributes->GetBulletDamage() / pow(2, 5 - RemainingBounces), BounceTarget);
 	}
 	//If invalid target
 	else
@@ -1248,10 +1208,7 @@ ABaseEnemy* AGun::FindNearestPawn(
 		CollisionParams,
 		ResponseParams);
 
-	if (!bFoundTarget)
-	{
-		return nullptr;
-	}
+	if (!bFoundTarget) {return nullptr;}
 
 	//Get closest pawn
 	HitResults.Sort(
@@ -1267,10 +1224,7 @@ ABaseEnemy* AGun::FindNearestPawn(
 		{
 			if (ABaseEnemy* BaseEnemy = Cast<ABaseEnemy>(HitResult.GetActor()))
 			{
-				if (BaseEnemy->IsDead())
-				{
-					continue;
-				}
+				if (BaseEnemy->IsDead()) {continue;}
 				return BaseEnemy;
 			}
 		}
@@ -1281,7 +1235,6 @@ ABaseEnemy* AGun::FindNearestPawn(
 void AGun::LaserLineTraceEffect(FVector& LaunchDirection, const TArray<FHitResult>& Hits)
 {
 	const UAttributeSet_Gun* MyAttributes = AbilitySystemComponent->GetSet<UAttributeSet_Gun>();
-
 	{
 		// Check for blocking hit
 		const FHitResult* BlockHit = nullptr;
@@ -1313,10 +1266,7 @@ void AGun::LaserLineTraceEffect(FVector& LaunchDirection, const TArray<FHitResul
 	}
 
 	//If no hits
-	if (Hits.Num() <= 0)
-	{
-		return;
-	}
+	if (Hits.Num() <= 0){return;}
 	int32 PierceCounter = 0;
 
 	bool bHitCounted = true;
@@ -1324,10 +1274,7 @@ void AGun::LaserLineTraceEffect(FVector& LaunchDirection, const TArray<FHitResul
 	//For each hit
 	for (const FHitResult& HitResult : Hits)
 	{
-		if (!IsValid(HitResult.GetActor()))
-		{
-			continue;
-		}
+		if (!IsValid(HitResult.GetActor())) {continue;}
 
 		//Enemies vs allies
 		ABaseEnemy* HitEnemy = Cast<ABaseEnemy>(HitResult.GetActor());
@@ -1335,7 +1282,6 @@ void AGun::LaserLineTraceEffect(FVector& LaunchDirection, const TArray<FHitResul
 		AEnemySpawner* HitSpawner = Cast<AEnemySpawner>(HitResult.GetActor());
 
 		FGameplayCueParameters CueParam;
-		CueParam.Instigator = GetOwner();
 		CueParam.Instigator = GetOwner();
 		CueParam.SourceObject = this;
 
@@ -1360,55 +1306,18 @@ void AGun::LaserLineTraceEffect(FVector& LaunchDirection, const TArray<FHitResul
 				Y25::Cues::Gun_AmmoHit_Laser,
 				CueParam);
 
-			float Damage = MyAttributes->GetBulletDamage();
-			if (const USkeletalMeshComponent* EnemyMesh = HitEnemy->GetMesh())
-			{
-				//check for critical
-				if (const float CritDistance = FVector::Dist(HitResult.ImpactPoint,
-					EnemyMesh->GetSocketLocation("Critical")); CritDistance <= GetCriticalDistance())
-				{
-					UAbilitySystemGlobals::Get().GetGameplayCueManager()->ExecuteGameplayCue_NonReplicated(
-						HitEnemy,
-						Y25::Cues::Gun_AmmoHit_Crit,
-						CueParam);
-					Damage *= GetCritDamageMultiplier();
-					GetStat(CriticalHitsStat)++;
-					GetTrueStat(TEXT("Critical Hits"))++;
-
-					if (const AMainCharacter* MainCharacter = Cast<AMainCharacter>(GetOwner()))
-					{
-						if (AControlPlayerState* ControlPlayerState =
-							Cast<AControlPlayerState>(MainCharacter->GetPlayerState()))
-						{
-							ControlPlayerState->UpdateScore();
-						}
-					}
-				}
-			}
-
-			DealDamage(Damage, LaunchDirection, HitEnemy);
-
-			// add to bots killed
-			if (HitEnemy->Health->GetHealth() <= 0)
-			{
-				GetStat(BotKillsStat)++;
-				GetTrueStat(TEXT("Bot Kills"))++;
-				if (const AMainCharacter* MainCharacter = Cast<AMainCharacter>(GetOwner()))
-				{
-					if (AControlPlayerState* ControlPlayerState =
-						Cast<AControlPlayerState>(MainCharacter->GetPlayerState()))
-					{
-						ControlPlayerState->UpdateScore();
-					}
-				}
-			}
-
+			const float Damage = CheckCriticalHit(HitEnemy, HitResult, CueParam);
+			DealDamage(Damage, HitEnemy);
+			
 			if (bHitCounted)
 			{
 				GetStat(EnemyHitsStat)++;
 				UpdateAccuracy();
 				bHitCounted = false;
 			}
+
+			// add to bots killed
+			CheckBotKill(HitEnemy);
 		}
 		//If hit an ally
 		else if (!HitSpawner && HitAlly && !HitAlly->GetIsDead())
@@ -1448,15 +1357,8 @@ void AGun::LaserLineTraceEffect(FVector& LaunchDirection, const TArray<FHitResul
 	}
 }
 
-void AGun::DealDamage(const float DamageToDeal, FVector& LaunchDirection, ABaseEnemy* Target)
+void AGun::DealDamage(const float DamageToDeal, ABaseEnemy* Target)
 {
-	//Can't launch enemies upwards
-	if (LaunchDirection.Z > 0)
-	{
-		LaunchDirection.Z = 0;
-	}
-	LaunchDirection.Normalize();
-
 	if (IsPowerStationShipAlive)
 	{
 		PowerStationAbility(Target);
@@ -1529,7 +1431,7 @@ void AGun::SpawnGrenade(FVector& SpawnLocation) const
 
 	const FVector AimVector = GetSpreadPoint();
 
-	const FRotator SpawnRotation = (AimVector - GetMuzzleTransform()).Rotation();
+	const FRotator SpawnRotation = (GetMuzzleTransform() - AimVector).Rotation();
 
 	//Set up transform
 	const FTransform SpawnTransform(SpawnRotation, SpawnLocation);
@@ -1570,7 +1472,7 @@ void AGun::SpawnGrenade(FVector& SpawnLocation) const
 void AGun::HandleOnPowerStationDeath()
 {
 	IsPowerStationShipAlive = false;
-	UE_LOG(LogGun, Log, TEXT("shipdeath event triggered"));
+	//UE_LOG(LogGun, Log, TEXT("Ship death event triggered"));
 }
 
 void AGun::PowerStationAbility(AActor* Target)
@@ -1588,6 +1490,6 @@ void AGun::PowerStationAbility(AActor* Target)
 	}
 	else
 	{
-		UE_LOG(LogGun, Log, TEXT("No ASC in Enemies"));
+		//UE_LOG(LogGun, Log, TEXT("No ASC in Enemies"));
 	}
 }
