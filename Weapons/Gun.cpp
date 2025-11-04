@@ -259,29 +259,84 @@ void AGun::UpdateAccuracy() const
 	}
 }
 
-float AGun::CheckCriticalHit(
-	ABaseEnemy* HitEnemy,
-	const FHitResult& Hit,
-	const FGameplayCueParameters& CueParam) const
+void AGun::CheckEnemyHit(
+	FVector& LaunchDirection,
+	FHitResult HitResult,
+	FGameplayTag EffectTag,
+	bool* BHitCounted)
 {
-	const UAttributeSet_Gun* MyAttributes = AbilitySystemComponent->GetSet<UAttributeSet_Gun>();
-	float Damage = MyAttributes->GetBulletDamage();
-	
-	if (const USkeletalMeshComponent* EnemyMesh = HitEnemy->GetMesh())
-	{
-		//Check for hit close enough to the crit point on an enemy
-		if (const float CritDistance = FVector::Dist(Hit.ImpactPoint, EnemyMesh->GetSocketLocation("Critical"));
-			CritDistance <= GetCriticalDistance())
-		{
-			//Deal crit damage + activate crit effects
-			UAbilitySystemGlobals::Get().GetGameplayCueManager()->ExecuteGameplayCue_NonReplicated(
-				HitEnemy,
-				Y25::Cues::Gun_AmmoHit_Crit,
-				CueParam);
+	ABaseEnemy* HitEnemy = Cast<ABaseEnemy>(HitResult.GetActor());
+	AMainCharacter* HitAlly = Cast<AMainCharacter>(HitResult.GetActor());
+	AEnemySpawner* HitSpawner = Cast<AEnemySpawner>(HitResult.GetActor());
 
-			Damage *= GetCritDamageMultiplier();
-			GetStat(CriticalHitsStat)++;
-			GetTrueStat(TEXT("Critical Hits"))++;
+	FGameplayCueParameters CueParam;
+	CueParam.Instigator = GetOwner();
+	CueParam.SourceObject = this;
+
+	const UAttributeSet_Gun* MyAttributes = AbilitySystemComponent->GetSet<UAttributeSet_Gun>();
+	
+	if (!HitEnemy && !HitAlly && !HitSpawner)
+	{
+		CueParam.Location = HitResult.ImpactPoint;
+		UAbilitySystemGlobals::Get().GetGameplayCueManager()->ExecuteGameplayCue_NonReplicated(
+			this,
+			Y25::Cues::Gun_AmmoHit_Other,
+			CueParam);
+	}
+	
+	if (!HitAlly && !HitSpawner && HitEnemy && !HitEnemy->IsDead())
+	{
+		//Ammo hit and damage to enemies
+		CueParam.SourceObject = HitEnemy;
+		CueParam.Location = HitResult.ImpactPoint;
+		UAbilitySystemGlobals::Get().GetGameplayCueManager()->ExecuteGameplayCue_NonReplicated(
+			HitEnemy,
+			EffectTag,
+			CueParam);
+
+		if (GetAmmoType() == EAmmoType::Chain)
+		{
+			ChainBounce(HitEnemy, LaunchDirection);
+		}
+		
+		float Damage = MyAttributes->GetBulletDamage();
+	
+		if (const USkeletalMeshComponent* EnemyMesh = HitEnemy->GetMesh())
+		{
+			//Check for hit close enough to the crit point on an enemy
+			if (const float CritDistance = FVector::Dist(HitResult.ImpactPoint, EnemyMesh->GetSocketLocation("Critical"));
+				CritDistance <= GetCriticalDistance())
+			{
+				//Deal crit damage + activate crit effects
+				UAbilitySystemGlobals::Get().GetGameplayCueManager()->ExecuteGameplayCue_NonReplicated(
+					HitEnemy,
+					Y25::Cues::Gun_AmmoHit_Crit,
+					CueParam);
+
+				Damage *= GetCritDamageMultiplier();
+				GetStat(CriticalHitsStat)++;
+				GetTrueStat(TEXT("Critical Hits"))++;
+
+				if (const AMainCharacter* MainCharacter = Cast<AMainCharacter>(GetOwner()))
+				{
+					if (AControlPlayerState* ControlPlayerState =
+						Cast<AControlPlayerState>(MainCharacter->GetPlayerState()))
+					{
+						ControlPlayerState->UpdateScore();
+					}
+				}
+			}
+		}
+		
+		DealDamage(Damage, HitEnemy);
+
+		GetStat(EnemyHitsStat)++;
+		UpdateAccuracy();
+
+		if (HitEnemy->Health->GetHealth() <= 0)
+		{
+			GetStat(BotKillsStat)++;
+			GetTrueStat(TEXT("Bot Kills"))++;
 
 			if (const AMainCharacter* MainCharacter = Cast<AMainCharacter>(GetOwner()))
 			{
@@ -292,27 +347,50 @@ float AGun::CheckCriticalHit(
 				}
 			}
 		}
-	}
-	return Damage;
-}
-
-void AGun::CheckBotKill(const ABaseEnemy* BaseEnemy) const
-{
-	if (BaseEnemy->Health->GetHealth() <= 0)
-	{
-		GetStat(BotKillsStat)++;
-		GetTrueStat(TEXT("Bot Kills"))++;
-
-		if (const AMainCharacter* MainCharacter = Cast<AMainCharacter>(GetOwner()))
+		
+		if (BHitCounted)
 		{
-			if (AControlPlayerState* ControlPlayerState =
-				Cast<AControlPlayerState>(MainCharacter->GetPlayerState()))
-			{
-				ControlPlayerState->UpdateScore();
-			}
+			*BHitCounted = false;
 		}
 	}
+	
+	if (!HitSpawner && HitAlly && !HitAlly->GetIsDead())
+	{
+		//On hit effect
+		CueParam.SourceObject = HitAlly;
+		CueParam.Location = HitAlly->GetActorLocation();
+		UAbilitySystemGlobals::Get().GetGameplayCueManager()->ExecuteGameplayCue_NonReplicated(
+			HitAlly,
+			EffectTag,
+			CueParam);
+
+		//Bounce to multiple enemies if chain ammo
+		if (GetAmmoType() == EAmmoType::Chain)
+		{
+			ChainBounce(HitAlly, LaunchDirection);
+		}
+
+		DealAllyDamage(MyAttributes->GetBulletDamage(), LaunchDirection, HitAlly);
+		GetStat(FriendHitsStat)++;
+		GetTrueStat(TEXT("Friend Hits"))++;
+		
+		if (BHitCounted != nullptr)
+		{
+			*BHitCounted = false;
+		}
+	}
+
+	if (HitSpawner)
+	{
+		CueParam.SourceObject = HitSpawner;
+		CueParam.Location = HitResult.Location;
+		UAbilitySystemGlobals::Get().GetGameplayCueManager()->ExecuteGameplayCue_NonReplicated(
+			HitSpawner,
+			Y25::Cues::Gun_AmmoHit_EnemySpawner,
+			CueParam);
+	}
 }
+
 
 // Get and Set
 #pragma region Getters/Setters
@@ -363,7 +441,6 @@ void AGun::SetGunType(const EGunType NewType)
 	}
 	GunType = NewType;
 	UpdateMagazineSize();
-	OnGunSwap.Broadcast(NewType);
 
 	//Mesh Update
 	if (AMainCharacter* MainCharacter = Cast<AMainCharacter>(GetOwner()))
@@ -433,11 +510,6 @@ void AGun::SetMod(UShopData_Item* Mod)
 		}
 	}
 	else { UE_LOG(LogGun, Log, TEXT("Mods are full")); }
-}
-
-TArray<UShopData_Item*> AGun::GetMods()
-{
-	return CurrentMods;
 }
 
 void AGun::SetCurrentGunStats(UShopData_Item* NewGunStats)
@@ -993,25 +1065,6 @@ void AGun::BulletChainLineTraceEffect(FVector& LaunchDirection, const FHitResult
 		return;
 	}
 
-	//Different for enemies/allies/other
-	ABaseEnemy* HitEnemy = Cast<ABaseEnemy>(Hit.GetActor());
-	AMainCharacter* HitAlly = Cast<AMainCharacter>(Hit.GetActor());
-	AEnemySpawner* HitSpawner = Cast<AEnemySpawner>(Hit.GetActor());
-
-	FGameplayCueParameters CueParam;
-	CueParam.Instigator = GetOwner();
-
-	//Play an on hit cue
-	if (!HitEnemy && !HitAlly && !HitSpawner)
-	{
-		CueParam.Location = Hit.ImpactPoint;
-		UAbilitySystemGlobals::Get().GetGameplayCueManager()->ExecuteGameplayCue_NonReplicated(
-			this,
-			Y25::Cues::Gun_AmmoHit_Other,
-			CueParam);
-		return;
-	}
-
 	//Check if chain ammo
 	FGameplayTag EffectTag;
 	if (GetAmmoType() == EAmmoType::Bullet)
@@ -1023,64 +1076,7 @@ void AGun::BulletChainLineTraceEffect(FVector& LaunchDirection, const FHitResult
 		EffectTag = Y25::Cues::Gun_AmmoHit_Chain;
 	}
 
-	//If hit an enemy
-	if (!HitAlly && !HitSpawner && HitEnemy && !HitEnemy->IsDead())
-	{
-		//On hit effect
-		CueParam.SourceObject = HitEnemy;
-		CueParam.Location = Hit.ImpactPoint;
-		UAbilitySystemGlobals::Get().GetGameplayCueManager()->ExecuteGameplayCue_NonReplicated(
-			HitEnemy,
-			EffectTag,
-			CueParam);
-
-		//Bounce to multiple enemies if chain ammo
-		if (GetAmmoType() == EAmmoType::Chain)
-		{
-			ChainBounce(HitEnemy, LaunchDirection);
-		}
-
-		const float Damage = CheckCriticalHit(HitEnemy, Hit, CueParam);
-
-		DealDamage(Damage, HitEnemy);
-
-		// add to bots killed
-		CheckBotKill(HitEnemy);
-
-		GetStat(EnemyHitsStat)++;
-		UpdateAccuracy();
-	}
-	//Else if attacking an ally
-	else if (!HitSpawner && HitAlly && !HitAlly->GetIsDead())
-	{
-		//On hit effect
-		CueParam.SourceObject = HitAlly;
-		CueParam.Location = HitAlly->GetActorLocation();
-		UAbilitySystemGlobals::Get().GetGameplayCueManager()->ExecuteGameplayCue_NonReplicated(
-			HitAlly,
-			EffectTag,
-			CueParam);
-
-		//Bounce to multiple enemies if chain ammo
-		if (GetAmmoType() == EAmmoType::Chain)
-		{
-			ChainBounce(HitAlly, LaunchDirection);
-		}
-		
-		DealAllyDamage(MyAttributes->GetBulletDamage(), LaunchDirection, HitAlly);
-		GetStat(FriendHitsStat)++;
-		GetTrueStat(TEXT("Friend Hits"))++;
-	}
-	//If they shot the enemy drop-ship
-	else
-	{
-		CueParam.SourceObject = HitSpawner;
-		CueParam.Location = Hit.Location;
-		UAbilitySystemGlobals::Get().GetGameplayCueManager()->ExecuteGameplayCue_NonReplicated(
-			HitSpawner,
-			Y25::Cues::Gun_AmmoHit_EnemySpawner,
-			CueParam);
-	}
+	CheckEnemyHit(LaunchDirection, Hit, EffectTag);
 }
 
 void AGun::ChainBounce(APawn* HitEnemy, FVector& LaunchDirection)
@@ -1276,77 +1272,7 @@ void AGun::LaserLineTraceEffect(FVector& LaunchDirection, const TArray<FHitResul
 	{
 		if (!IsValid(HitResult.GetActor())) {continue;}
 
-		//Enemies vs allies
-		ABaseEnemy* HitEnemy = Cast<ABaseEnemy>(HitResult.GetActor());
-		AMainCharacter* HitAlly = Cast<AMainCharacter>(HitResult.GetActor());
-		AEnemySpawner* HitSpawner = Cast<AEnemySpawner>(HitResult.GetActor());
-
-		FGameplayCueParameters CueParam;
-		CueParam.Instigator = GetOwner();
-		CueParam.SourceObject = this;
-
-		//Checking what was hit
-		if (!HitEnemy && !HitAlly && !HitSpawner)
-		{
-			CueParam.Location = HitResult.ImpactPoint;
-			UAbilitySystemGlobals::Get().GetGameplayCueManager()->ExecuteGameplayCue_NonReplicated(
-				this,
-				Y25::Cues::Gun_AmmoHit_Other,
-				CueParam);
-			return;
-		}
-
-		if (!HitAlly && !HitSpawner && HitEnemy && !HitEnemy->IsDead())
-		{
-			//Ammo hit and damage to enemies
-			CueParam.SourceObject = HitEnemy;
-			CueParam.Location = HitResult.ImpactPoint;
-			UAbilitySystemGlobals::Get().GetGameplayCueManager()->ExecuteGameplayCue_NonReplicated(
-				HitEnemy,
-				Y25::Cues::Gun_AmmoHit_Laser,
-				CueParam);
-
-			const float Damage = CheckCriticalHit(HitEnemy, HitResult, CueParam);
-			DealDamage(Damage, HitEnemy);
-			
-			if (bHitCounted)
-			{
-				GetStat(EnemyHitsStat)++;
-				UpdateAccuracy();
-				bHitCounted = false;
-			}
-
-			// add to bots killed
-			CheckBotKill(HitEnemy);
-		}
-		//If hit an ally
-		else if (!HitSpawner && HitAlly && !HitAlly->GetIsDead())
-		{
-			//Ammo hit and damage to allies
-			CueParam.SourceObject = HitAlly;
-			CueParam.Location = HitAlly->GetActorLocation();
-			UAbilitySystemGlobals::Get().GetGameplayCueManager()->ExecuteGameplayCue_NonReplicated(
-				HitAlly,
-				Y25::Cues::Gun_AmmoHit_Laser,
-				CueParam);
-
-			DealAllyDamage(MyAttributes->GetBulletDamage(), LaunchDirection, HitAlly);
-			if (bHitCounted)
-			{
-				GetStat(FriendHitsStat)++;
-				GetTrueStat(TEXT("Friend Hits"))++;
-				bHitCounted = false;
-			}
-		}
-		else
-		{
-			CueParam.SourceObject = HitSpawner;
-			CueParam.Location = HitResult.Location;
-			UAbilitySystemGlobals::Get().GetGameplayCueManager()->ExecuteGameplayCue_NonReplicated(
-				HitSpawner,
-				Y25::Cues::Gun_AmmoHit_EnemySpawner,
-				CueParam);
-		}
+		CheckEnemyHit(LaunchDirection, HitResult, Y25::Cues::Gun_AmmoHit_Laser, &bHitCounted);
 
 		//increment and check if done with pierces
 		PierceCounter++;
@@ -1377,7 +1303,6 @@ void AGun::DealDamage(const float DamageToDeal, ABaseEnemy* Target)
 		this);
 }
 
-	
 
 void AGun::DealAllyDamage(const float DamageToDeal, FVector& LaunchDirection, AMainCharacter* Target)
 {

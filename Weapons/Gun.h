@@ -91,9 +91,6 @@ public:
 
 	DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnGunSwap, EGunType, GunType);
 
-	UPROPERTY(BlueprintAssignable)
-	FOnGunSwap OnGunSwap;
-
 	//Gameplay effects
 	TSubclassOf<UGameplayEffect> InitialAttributesEffect;
 
@@ -117,9 +114,6 @@ public:
 
 	UFUNCTION(BlueprintCallable)
 	void SetMod(UShopData_Item* Mod);
-
-	UFUNCTION(BlueprintCallable)
-	TArray<UShopData_Item*> GetMods();
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UShopData_Item>> CurrentMods;
@@ -431,10 +425,12 @@ protected:
 
 	void UpdateAccuracy() const;
 
-	float CheckCriticalHit(ABaseEnemy* HitEnemy, const FHitResult& Hit, const FGameplayCueParameters& CueParam) const;
-
-	void CheckBotKill(const ABaseEnemy* BaseEnemy) const;
-
+	void CheckEnemyHit(
+		FVector& LaunchDirection,
+		FHitResult HitResult,
+		FGameplayTag EffectTag,
+		bool* BHitCounted = nullptr);
+	
 	//AttributeSet
 	UPROPERTY()
 	TObjectPtr<UAttributeSet_Gun> AttributeSet_Gun;
